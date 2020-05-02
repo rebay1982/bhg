@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/gorilla/mux"
 )
 
 // Our logging middleware
@@ -17,15 +19,25 @@ func (l *logger) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	log.Println("Stop")
 }
 
-// Our basic HTTP serving function.
+// HANDLER FUNC  Our basic HTTP serving function.
 func hello(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello %s\n", r.URL.Query().Get("name"))
 }
 
 func main() {
-	f := http.HandlerFunc(hello)
-	l := logger{Inner: f}
+
+	r := mux.NewRouter()
+	r.HandleFunc("/users/{user:[a-z]+}", func(w http.ResponseWriter, req *http.Request) {
+		user := mux.Vars(req)["user"]
+		fmt.Fprintf(w, "User [%s]", user)
+	}).Methods("GET")
+
+	//f := http.HandlerFunc(hello)
+	//l := logger{Inner: f}
 
 	// Use the router here. --> &r
-	http.ListenAndServe(":8000", &l)
+
+	http.Handle("/", r)
+	http.ListenAndServe(":8000", nil)
+
 }

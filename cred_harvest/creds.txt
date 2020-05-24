@@ -1,0 +1,1 @@
+time="2020-05-23T22:38:48-04:00" level=info msg="Login Attempt" fields.time="2020-05-23 22:38:48.92960342 -0400 EDT m=+14.457155282" ip_address="127.0.0.1:38274" password=asd user-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36" username=asd

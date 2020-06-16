@@ -1,23 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
+	"os"
+	"text/tabwriter"
 
-	"github.com/rebay1982/bhg/dns/dnsenum/pkg"
+	"github.com/rebay1982/bhg/dns/dnsenum/pkg/lookup"
+	"github.com/rebay1982/bhg/dns/dnsenum/pkg/worker"
 )
-
-type result struct {
-	IPAddress string
-	Hostname  string
-}
 
 func main() {
 	var (
-		flDomain = flag.String("domain", "", "The domain on which to perform the guessing on")
-		//flWordlist    = flag.String("wordlist", "", "The world list to use for enumeration")
-		//flWorkerCount = flag.Int("c", 100, "The amount of workers to use")
-		flServerAddr = flag.String("server", "8.8.8.8:53", "The DNS server to use")
+		flDomain      = flag.String("domain", "", "The domain on which to perform the guessing on")
+		flWordlist    = flag.String("wordlist", "", "The world list to use for enumeration")
+		flWorkerCount = flag.Int("c", 100, "The amount of workers to use")
+		flServerAddr  = flag.String("server", "8.8.8.8:53", "The DNS server to use")
 	)
 
 	flag.Parse()
@@ -26,42 +25,49 @@ func main() {
 		fmt.Println("-domain and -worldlist are required")
 	}
 
-	fmt.Printf("Looking up [%s] against [%s]\n", *flDomain, *flServerAddr)
-	results := dolookup(*flDomain, *flServerAddr)
+	var results []lookup.Result
+	fqdns := make(chan string, *flWorkerCount)
+	gather := make(chan []lookup.Result)
+	tracker := make(chan worker.Empty)
 
-	for _, result := range results {
-		fmt.Printf("[%s]: [%s]\n", result.Hostname, result.IPAddress)
+	// Open the word list for scanning.
+	fh, err := os.Open(*flWordlist)
+	if err != nil {
+		panic(err)
 	}
-}
 
-func dolookup(fqdn, serverAddr string) []result {
-	var results []result
-	var cfqdn = fqdn
+	defer fh.Close()
+	scanner := bufio.NewScanner(fh)
 
-	// First check CNAMES
-	for {
-		cnames, err := lookup.LookupCNAME(cfqdn, serverAddr)
-		if err == nil && len(cnames) > 0 {
-
-			for _, cname := range cnames {
-				fmt.Printf("Found cname [%s]\n", cname)
-			}
-
-			cfqdn = cnames[0] // Pick first CNAME
-			continue
-		}
-
-		ips, err := lookup.LookupA(cfqdn, serverAddr)
-		if err != nil {
-			fmt.Println("DNS: Unable to find A Records.")
-			break
-		}
-
-		for _, ip := range ips {
-			results = append(results, result{IPAddress: ip, Hostname: fqdn})
-		}
-
-		break
+	for i := 0; i < *flWorkerCount; i++ {
+		go worker.Worker(tracker, fqdns, gather, *flServerAddr)
 	}
-	return results
+
+	for scanner.Scan() {
+		fqdns <- fmt.Sprintf("%s.%s", scanner.Text(), *flDomain)
+	}
+
+	go func() {
+		for r := range gather {
+			results = append(results, r...)
+		}
+		var e worker.Empty
+		tracker <- e
+	}()
+
+	close(fqdns)
+	for i := 0; i < *flWorkerCount; i++ {
+		<-tracker
+	}
+	close(gather)
+	<-tracker
+
+	// Print out results with a tabwriter
+	w := tabwriter.NewWriter(os.Stdout, 0, 8, 4, ' ', 0)
+	for _, r := range results {
+		fmt.Fprintf(w, "%s\t%s\n", r.Hostname, r.IPAddress)
+	}
+
+	w.Flush()
+
 }

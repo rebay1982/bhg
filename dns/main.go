@@ -12,7 +12,8 @@ func main() {
 	fqdn := dns.Fqdn("stacktitan.com")
 	msg.SetQuestion(fqdn, dns.TypeA)
 
-	in, err := dns.Exchange(&msg, "8.8.8.8:53")
+	// use 8.8.8.8:53 for testing
+	in, err := dns.Exchange(&msg, "127.0.0.1:53")
 	if err != nil {
 		panic(err)
 	}

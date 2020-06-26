@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/gopacket"
@@ -16,43 +17,36 @@ var (
 	snaplen  = int32(320)
 	promisc  = true
 	timeout  = pcap.BlockForever
-	filter   = "tcp[13] == 0x11 or tcp[13] == 0x10 or tcp[13] == 0x18"
+	filter   = "(tcp[13] == 0x11 or tcp[13] == 0x10 or tcp[13] == 0x18) and src host %s and src port %s"
 	devFound = false
 	results  = make(map[string]int)
+
+	lock   = sync.RWMutex{}
+	notify = make(chan empty)
 )
 
-func capture(iface, target string) {
+func capture(iface, target string, port string) {
 	handle, err := pcap.OpenLive(iface, snaplen, promisc, timeout)
 	if err != nil {
 		log.Panicln(err)
 	}
 	defer handle.Close()
 
-	if err := handle.SetBPFFilter(filter); err != nil {
+	parsedFilter := fmt.Sprintf(filter, target, port)
+	if err := handle.SetBPFFilter(parsedFilter); err != nil {
 		log.Panicln(err)
 	}
 
 	source := gopacket.NewPacketSource(handle, handle.LinkType())
-	fmt.Println("Capturing packets")
-	for packet := range source.Packets() {
-		networkLayer := packet.NetworkLayer()
-		if networkLayer == nil {
-			continue
-		}
-		transportLayer := packet.TransportLayer()
-		if transportLayer == nil {
-			continue
-		}
+	for range source.Packets() {
 
-		srcHost := networkLayer.NetworkFlow().Src().String()
-		srcPort := transportLayer.TransportFlow().Src().String()
-
-		if srcHost != target {
-			continue
-		}
-		results[srcPort] += 1
+		lock.Lock()
+		results[port] += 1
+		lock.Unlock()
 	}
 }
+
+type empty struct{}
 
 func main() {
 
@@ -76,30 +70,50 @@ func main() {
 	}
 
 	ip := os.Args[2]
-	go capture(iface, ip)
-	time.Sleep(1 * time.Second)
 
 	ports, err := explode(os.Args[3])
 	if err != nil {
 		log.Panicln(err)
 	}
 
+	fmt.Printf("Setting up port capture for ports [%s]\n\n", os.Args[3])
 	for _, port := range ports {
-		target := fmt.Sprintf("%s:%s", ip, port)
-		fmt.Println("Trying", target)
-		c, err := net.DialTimeout("tcp", target, 1000*time.Millisecond)
-		if err != nil {
-			continue
-		}
-		c.Close()
+		go capture(iface, ip, port)
+	}
+	time.Sleep(1 * time.Second)
+
+	for _, port := range ports {
+		go scanPort(notify, ip, port)
 	}
 	time.Sleep(2 * time.Second)
 
+	// Gather
+	for i := 0; i < len(ports); i++ {
+		<-notify
+	}
+
+	fmt.Println("\n---[RESULTS]------------------------------------------")
 	for port, confidence := range results {
 		if confidence >= 1 {
-			fmt.Printf("Port %s open (confidence: %d)\n", port, confidence)
+			fmt.Printf("Port [%s] open (confidence: %d)\n", port, confidence)
 		}
 	}
+}
+
+func scanPort(notify chan empty, ip string, port string) {
+
+	target := fmt.Sprintf("%s:%s", ip, port)
+
+	fmt.Printf("Trying [%s]...\n", target)
+
+	c, err := net.DialTimeout("tcp", target, 1000*time.Millisecond)
+	if err == nil {
+		c.Close()
+	}
+
+	// Notify
+	var e empty
+	notify <- e
 }
 
 func explode(portString string) ([]string, error) {
